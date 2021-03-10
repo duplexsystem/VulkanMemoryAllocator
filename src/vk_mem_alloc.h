@@ -6009,6 +6009,222 @@ private:
 #endif // #if VMA_USE_STL_LIST
 
 ////////////////////////////////////////////////////////////////////////////////
+// class VmaIntrusiveLinkedList
+
+/*
+Expected interface of ItemTypeTraits:
+struct MyItemTypeTraits
+{
+    typedef MyItem ItemType;
+    static ItemType* GetPrev(const ItemType* item) { return item->myPrevPtr; }
+    static ItemType* GetNext(const ItemType* item) { return item->myNextPtr; }
+    static ItemType*& AccessPrev(ItemType* item) { return item->myPrevPtr; }
+    static ItemType*& AccessNext(ItemType* item) { return item->myNextPtr; }
+};
+*/
+template<typename ItemTypeTraits>
+class VmaIntrusiveLinkedList
+{
+public:
+    typedef typename ItemTypeTraits::ItemType ItemType;
+    static ItemType* GetPrev(const ItemType* item) { return ItemTypeTraits::GetPrev(item); }
+    static ItemType* GetNext(const ItemType* item) { return ItemTypeTraits::GetNext(item); }
+    // Movable, not copyable.
+    VmaIntrusiveLinkedList() { }
+    VmaIntrusiveLinkedList(const VmaIntrusiveLinkedList<ItemTypeTraits>& src) = delete;
+    VmaIntrusiveLinkedList(VmaIntrusiveLinkedList<ItemTypeTraits>&& src) :
+        m_Front(src.m_Front), m_Back(src.m_Back), m_Count(src.m_Count)
+    {
+        src.m_Front = src.m_Back = VMA_NULL;
+        src.m_Count = 0;
+    }
+    ~VmaIntrusiveLinkedList()
+    {
+        VMA_HEAVY_ASSERT(IsEmpty());
+    }
+    VmaIntrusiveLinkedList<ItemTypeTraits>& operator=(const VmaIntrusiveLinkedList<ItemTypeTraits>& src) = delete;
+    VmaIntrusiveLinkedList<ItemTypeTraits>& operator=(VmaIntrusiveLinkedList<ItemTypeTraits>&& src)
+    {
+        if(&src != this)
+        {
+            VMA_HEAVY_ASSERT(IsEmpty());
+            m_Front = src.m_Front;
+            m_Back = src.m_Back;
+            m_Count = src.m_Count;
+            src.m_Front = src.m_Back = VMA_NULL;
+            src.m_Count = 0;
+        }
+        return *this;
+    }
+    void RemoveAll()
+    {
+        if(!IsEmpty())
+        {
+            ItemType* item = m_Back;
+            while(item != VMA_NULL)
+            {
+                ItemType* const prevItem = ItemTypeTraits::AccessPrev(item);
+                ItemTypeTraits::AccessPrev(item) = VMA_NULL;
+                ItemTypeTraits::AccessNext(item) = VMA_NULL;
+                item = prevItem;
+            }
+            m_Front = VMA_NULL;
+            m_Back = VMA_NULL;
+            m_Count = 0;
+        }
+    }
+    size_t GetCount() const { return m_Count; }
+    bool IsEmpty() const { return m_Count == 0; }
+    ItemType* Front() { return m_Front; }
+    const ItemType* Front() const { return m_Front; }
+    ItemType* Back() { return m_Back; }
+    const ItemType* Back() const { return m_Back; }
+    void PushBack(ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(ItemTypeTraits::GetPrev(item) == VMA_NULL && ItemTypeTraits::GetNext(item) == VMA_NULL);
+        if(IsEmpty())
+        {
+            m_Front = item;
+            m_Back = item;
+            m_Count = 1;
+        }
+        else
+        {
+            ItemTypeTraits::AccessPrev(item) = m_Back;
+            ItemTypeTraits::AccessNext(m_Back) = item;
+            m_Back = item;
+            ++m_Count;
+        }
+    }
+    void PushFront(ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(ItemTypeTraits::GetPrev(item) == VMA_NULL && ItemTypeTraits::GetNext(item) == VMA_NULL);
+        if(IsEmpty())
+        {
+            m_Front = item;
+            m_Back = item;
+            m_Count = 1;
+        }
+        else
+        {
+            ItemTypeTraits::AccessNext(item) = m_Front;
+            ItemTypeTraits::AccessPrev(m_Front) = item;
+            m_Front = item;
+            ++m_Count;
+        }
+    }
+    ItemType* PopBack()
+    {
+        VMA_HEAVY_ASSERT(m_Count > 0);
+        ItemType* const backItem = m_Back;
+        ItemType* const prevItem = ItemTypeTraits::GetPrev(backItem);
+        if(prevItem != VMA_NULL)
+        {
+            ItemTypeTraits::AccessNext(prevItem) = VMA_NULL;
+        }
+        m_Back = prevItem;
+        --m_Count;
+        ItemTypeTraits::AccessPrev(backItem) = VMA_NULL;
+        ItemTypeTraits::AccessNext(backItem) = VMA_NULL;
+        return backItem;
+    }
+    ItemType* PopFront()
+    {
+        VMA_HEAVY_ASSERT(m_Count > 0);
+        ItemType* const frontItem = m_Front;
+        ItemType* const nextItem = ItemTypeTraits::GetNext(frontItem);
+        if(nextItem != VMA_NULL)
+        {
+            ItemTypeTraits::AccessPrev(nextItem) = VMA_NULL;
+        }
+        m_Front = nextItem;
+        --m_Count;
+        ItemTypeTraits::AccessPrev(frontItem) = VMA_NULL;
+        ItemTypeTraits::AccessNext(frontItem) = VMA_NULL;
+        return frontItem;
+    }
+
+    // MyItem can be null - it means PushBack.
+    void InsertBefore(ItemType* existingItem, ItemType* newItem)
+    {
+        VMA_HEAVY_ASSERT(newItem != VMA_NULL && ItemTypeTraits::GetPrev(newItem) == VMA_NULL && ItemTypeTraits::GetNext(newItem) == VMA_NULL);
+        if(existingItem != VMA_NULL)
+        {
+            ItemType* const prevItem = ItemTypeTraits::GetPrev(existingItem);
+            ItemTypeTraits::AccessPrev(newItem) = prevItem;
+            ItemTypeTraits::AccessNext(newItem) = existingItem;
+            ItemTypeTraits::AccessPrev(existingItem) = newItem;
+            if(prevItem != VMA_NULL)
+            {
+                ItemTypeTraits::AccessNext(prevItem) = newItem;
+            }
+            else
+            {
+                VMA_HEAVY_ASSERT(m_Front == existingItem);
+                m_Front = newItem;
+            }
+            ++m_Count;
+        }
+        else
+            PushBack(newItem);
+    }
+    // MyItem can be null - it means PushFront.
+    void InsertAfter(ItemType* existingItem, ItemType* newItem)
+    {
+        VMA_HEAVY_ASSERT(newItem != VMA_NULL && ItemTypeTraits::GetPrev(newItem) == VMA_NULL && ItemTypeTraits::GetNext(newItem) == VMA_NULL);
+        if(existingItem != VMA_NULL)
+        {
+            ItemType* const nextItem = ItemTypeTraits::GetNext(existingItem);
+            ItemTypeTraits::AccessNext(newItem) = nextItem;
+            ItemTypeTraits::AccessPrev(newItem) = existingItem;
+            ItemTypeTraits::AccessNext(existingItem) = newItem;
+            if(nextItem != VMA_NULL)
+            {
+                ItemTypeTraits::AccessPrev(nextItem) = newItem;
+            }
+            else
+            {
+                VMA_HEAVY_ASSERT(m_Back == existingItem);
+                m_Back = newItem;
+            }
+            ++m_Count;
+        }
+        else
+            return PushFront(newItem);
+    }
+    void Remove(ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(item != VMA_NULL && m_Count > 0);
+        if(ItemTypeTraits::GetPrev(item) != VMA_NULL)
+        {
+            ItemTypeTraits::AccessNext(ItemTypeTraits::AccessPrev(item)) = ItemTypeTraits::GetNext(item);
+        }
+        else
+        {
+            VMA_HEAVY_ASSERT(m_Front == item);
+            m_Front = ItemTypeTraits::GetNext(item);
+        }
+
+        if(ItemTypeTraits::GetNext(item) != VMA_NULL)
+        {
+            ItemTypeTraits::AccessPrev(ItemTypeTraits::AccessNext(item)) = ItemTypeTraits::GetPrev(item);
+        }
+        else
+        {
+            VMA_HEAVY_ASSERT(m_Back == item);
+            m_Back = ItemTypeTraits::GetPrev(item);
+        }
+        ItemTypeTraits::AccessPrev(item) = VMA_NULL;
+        ItemTypeTraits::AccessNext(item) = VMA_NULL;
+        --m_Count;
+    }
+private:
+    ItemType* m_Front = VMA_NULL;
+    ItemType* m_Back = VMA_NULL;
+    size_t m_Count = 0;
+};
+
+////////////////////////////////////////////////////////////////////////////////
 // class VmaMap
 
 // Unused in this version.
@@ -6222,6 +6438,8 @@ public:
         m_MapCount = (pMappedData != VMA_NULL) ? MAP_COUNT_FLAG_PERSISTENT_MAP : 0;
         m_DedicatedAllocation.m_hMemory = hMemory;
         m_DedicatedAllocation.m_pMappedData = pMappedData;
+        m_DedicatedAllocation.m_Prev = VMA_NULL;
+        m_DedicatedAllocation.m_Next = VMA_NULL;
     }
 
     ALLOCATION_TYPE GetType() const { return (ALLOCATION_TYPE)m_Type; }
@@ -6319,6 +6537,8 @@ private:
     {
         VkDeviceMemory m_hMemory;
         void* m_pMappedData; // Not null means memory is mapped.
+        VmaAllocation_T* m_Prev;
+        VmaAllocation_T* m_Next;
     };
 
     union
@@ -6335,6 +6555,32 @@ private:
 #endif
 
     void FreeUserDataString(VmaAllocator hAllocator);
+
+    friend struct VmaDedicatedAllocationListItemTraits;
+};
+
+struct VmaDedicatedAllocationListItemTraits
+{
+    typedef VmaAllocation_T ItemType;
+    static ItemType* GetPrev(const ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(item->GetType() == VmaAllocation_T::ALLOCATION_TYPE_DEDICATED);
+        return item->m_DedicatedAllocation.m_Prev;
+    }
+    static ItemType* GetNext(const ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(item->GetType() == VmaAllocation_T::ALLOCATION_TYPE_DEDICATED);
+        return item->m_DedicatedAllocation.m_Next;
+    }
+    static ItemType*& AccessPrev(ItemType* item)
+    {
+        VMA_HEAVY_ASSERT(item->GetType() == VmaAllocation_T::ALLOCATION_TYPE_DEDICATED);
+        return item->m_DedicatedAllocation.m_Prev;
+    }
+    static ItemType*& AccessNext(ItemType* item){
+        VMA_HEAVY_ASSERT(item->GetType() == VmaAllocation_T::ALLOCATION_TYPE_DEDICATED);
+        return item->m_DedicatedAllocation.m_Next;
+    }
 };
 
 /*
@@ -7022,14 +7268,6 @@ private:
     void* m_pMappedData;
 };
 
-struct VmaPointerLess
-{
-    bool operator()(const void* lhs, const void* rhs) const
-    {
-        return lhs < rhs;
-    }
-};
-
 struct VmaDefragmentationMove
 {
     size_t srcBlockIndex;
@@ -7233,6 +7471,18 @@ public:
 private:
     uint32_t m_Id;
     char* m_Name;
+    VmaPool_T* m_PrevPool = VMA_NULL;
+    VmaPool_T* m_NextPool = VMA_NULL;
+    friend struct VmaPoolListItemTraits;
+};
+
+struct VmaPoolListItemTraits
+{
+    typedef VmaPool_T ItemType;
+    static ItemType* GetPrev(const ItemType* item) { return item->m_PrevPool; }
+    static ItemType* GetNext(const ItemType* item) { return item->m_NextPool; }
+    static ItemType*& AccessPrev(ItemType* item) { return item->m_PrevPool; }
+    static ItemType*& AccessNext(ItemType* item) { return item->m_NextPool; }
 };
 
 /*
@@ -7909,9 +8159,8 @@ public:
     // Default pools.
     VmaBlockVector* m_pBlockVectors[VK_MAX_MEMORY_TYPES];
 
-    // Each vector is sorted by memory (handle value).
-    typedef VmaVector< VmaAllocation, VmaStlAllocator<VmaAllocation> > AllocationVectorType;
-    AllocationVectorType* m_pDedicatedAllocations[VK_MAX_MEMORY_TYPES];
+    typedef VmaIntrusiveLinkedList<VmaDedicatedAllocationListItemTraits> DedicatedAllocationLinkedList;
+    DedicatedAllocationLinkedList m_DedicatedAllocations[VK_MAX_MEMORY_TYPES];
     VMA_RW_MUTEX m_DedicatedAllocationsMutex[VK_MAX_MEMORY_TYPES];
 
     VmaCurrentBudgetData m_Budget;
@@ -8098,8 +8347,9 @@ private:
     VMA_ATOMIC_UINT32 m_GpuDefragmentationMemoryTypeBits; // UINT32_MAX means uninitialized.
 
     VMA_RW_MUTEX m_PoolsMutex;
-    // Protected by m_PoolsMutex. Sorted by pointer value.
-    VmaVector<VmaPool, VmaStlAllocator<VmaPool> > m_Pools;
+    typedef VmaIntrusiveLinkedList<VmaPoolListItemTraits> PoolList;
+    // Protected by m_PoolsMutex.
+    PoolList m_Pools;
     uint32_t m_NextPoolId;
 
     VmaVulkanFunctions m_VulkanFunctions;
@@ -12607,6 +12857,7 @@ VmaPool_T::VmaPool_T(
 
 VmaPool_T::~VmaPool_T()
 {
+    VMA_ASSERT(m_PrevPool == VMA_NULL && m_NextPool == VMA_NULL);
 }
 
 void VmaPool_T::SetName(const char* pName)
@@ -15731,7 +15982,6 @@ VmaAllocator_T::VmaAllocator_T(const VmaAllocatorCreateInfo* pCreateInfo) :
     m_PhysicalDevice(pCreateInfo->physicalDevice),
     m_CurrentFrameIndex(0),
     m_GpuDefragmentationMemoryTypeBits(UINT32_MAX),
-    m_Pools(VmaStlAllocator<VmaPool>(GetAllocationCallbacks())),
     m_NextPoolId(0),
     m_GlobalMemoryTypeBits(UINT32_MAX)
 #if VMA_RECORDING_ENABLED
@@ -15803,7 +16053,6 @@ VmaAllocator_T::VmaAllocator_T(const VmaAllocatorCreateInfo* pCreateInfo) :
     memset(&m_MemProps, 0, sizeof(m_MemProps));
 
     memset(&m_pBlockVectors, 0, sizeof(m_pBlockVectors));
-    memset(&m_pDedicatedAllocations, 0, sizeof(m_pDedicatedAllocations));
     memset(&m_VulkanFunctions, 0, sizeof(m_VulkanFunctions));
 
     if(pCreateInfo->pDeviceMemoryCallbacks != VMA_NULL)
@@ -15862,8 +16111,6 @@ VmaAllocator_T::VmaAllocator_T(const VmaAllocatorCreateInfo* pCreateInfo) :
             0.5f); // priority (0.5 is the default per Vulkan spec)
         // No need to call m_pBlockVectors[memTypeIndex][blockVectorTypeIndex]->CreateMinBlocks here,
         // becase minBlockCount is 0.
-        m_pDedicatedAllocations[memTypeIndex] = vma_new(this, AllocationVectorType)(VmaStlAllocator<VmaAllocation>(GetAllocationCallbacks()));
-
     }
 }
 
@@ -15916,17 +16163,16 @@ VmaAllocator_T::~VmaAllocator_T()
     }
 #endif
 
-    VMA_ASSERT(m_Pools.empty());
+    VMA_ASSERT(m_Pools.IsEmpty());
 
-    for(size_t i = GetMemoryTypeCount(); i--; )
+    for(size_t memTypeIndex = GetMemoryTypeCount(); memTypeIndex--; )
     {
-        if(m_pDedicatedAllocations[i] != VMA_NULL && !m_pDedicatedAllocations[i]->empty())
+        if(!m_DedicatedAllocations[memTypeIndex].IsEmpty())
         {
             VMA_ASSERT(0 && "Unfreed dedicated allocations found.");
         }
 
-        vma_delete(this, m_pDedicatedAllocations[i]);
-        vma_delete(this, m_pBlockVectors[i]);
+        vma_delete(this, m_pBlockVectors[memTypeIndex]);
     }
 }
 
@@ -16382,14 +16628,13 @@ VkResult VmaAllocator_T::AllocateDedicatedMemory(
 
     if(res == VK_SUCCESS)
     {
-        // Register them in m_pDedicatedAllocations.
+        // Register them in m_DedicatedAllocations.
         {
             VmaMutexLockWrite lock(m_DedicatedAllocationsMutex[memTypeIndex], m_UseMutex);
-            AllocationVectorType* pDedicatedAllocations = m_pDedicatedAllocations[memTypeIndex];
-            VMA_ASSERT(pDedicatedAllocations);
+            DedicatedAllocationLinkedList& dedicatedAllocations = m_DedicatedAllocations[memTypeIndex];
             for(allocIndex = 0; allocIndex < allocationCount; ++allocIndex)
             {
-                VmaVectorInsertSorted<VmaPointerLess>(*pDedicatedAllocations, pAllocations[allocIndex]);
+                dedicatedAllocations.PushBack(pAllocations[allocIndex]);
             }
         }
 
@@ -16763,9 +17008,9 @@ void VmaAllocator_T::CalculateStats(VmaStats* pStats)
     // Process custom pools.
     {
         VmaMutexLockRead lock(m_PoolsMutex, m_UseMutex);
-        for(size_t poolIndex = 0, poolCount = m_Pools.size(); poolIndex < poolCount; ++poolIndex)
+        for(VmaPool pool = m_Pools.Front(); pool != VMA_NULL; pool = m_Pools.GetNext(pool))
         {
-            m_Pools[poolIndex]->m_BlockVector.AddStats(pStats);
+            pool->m_BlockVector.AddStats(pStats);
         }
     }
 
@@ -16774,12 +17019,12 @@ void VmaAllocator_T::CalculateStats(VmaStats* pStats)
     {
         const uint32_t memHeapIndex = MemoryTypeIndexToHeapIndex(memTypeIndex);
         VmaMutexLockRead dedicatedAllocationsLock(m_DedicatedAllocationsMutex[memTypeIndex], m_UseMutex);
-        AllocationVectorType* const pDedicatedAllocVector = m_pDedicatedAllocations[memTypeIndex];
-        VMA_ASSERT(pDedicatedAllocVector);
-        for(size_t allocIndex = 0, allocCount = pDedicatedAllocVector->size(); allocIndex < allocCount; ++allocIndex)
+        DedicatedAllocationLinkedList& dedicatedAllocList = m_DedicatedAllocations[memTypeIndex];
+        for(VmaAllocation alloc = dedicatedAllocList.Front();
+            alloc != VMA_NULL; alloc = dedicatedAllocList.GetNext(alloc))
         {
             VmaStatInfo allocationStatInfo;
-            (*pDedicatedAllocVector)[allocIndex]->DedicatedAllocCalcStatsInfo(allocationStatInfo);
+            alloc->DedicatedAllocCalcStatsInfo(allocationStatInfo);
             VmaAddStatInfo(pStats->total, allocationStatInfo);
             VmaAddStatInfo(pStats->memoryType[memTypeIndex], allocationStatInfo);
             VmaAddStatInfo(pStats->memoryHeap[memHeapIndex], allocationStatInfo);
@@ -17060,7 +17305,7 @@ VkResult VmaAllocator_T::CreatePool(const VmaPoolCreateInfo* pCreateInfo, VmaPoo
     {
         VmaMutexLockWrite lock(m_PoolsMutex, m_UseMutex);
         (*pPool)->SetId(m_NextPoolId++);
-        VmaVectorInsertSorted<VmaPointerLess>(m_Pools, *pPool);
+        m_Pools.PushBack(*pPool);
     }
 
     return VK_SUCCESS;
@@ -17071,8 +17316,7 @@ void VmaAllocator_T::DestroyPool(VmaPool pool)
     // Remove from m_Pools.
     {
         VmaMutexLockWrite lock(m_PoolsMutex, m_UseMutex);
-        bool success = VmaVectorRemoveSorted<VmaPointerLess>(m_Pools, pool);
-        VMA_ASSERT(success && "Pool not found in Allocator.");
+        m_Pools.Remove(pool);
     }
 
     vma_delete(this, pool);
@@ -17137,11 +17381,11 @@ VkResult VmaAllocator_T::CheckCorruption(uint32_t memoryTypeBits)
     // Process custom pools.
     {
         VmaMutexLockRead lock(m_PoolsMutex, m_UseMutex);
-        for(size_t poolIndex = 0, poolCount = m_Pools.size(); poolIndex < poolCount; ++poolIndex)
+        for(VmaPool pool = m_Pools.Front(); pool != VMA_NULL; pool = m_Pools.GetNext(pool))
         {
-            if(((1u << m_Pools[poolIndex]->m_BlockVector.GetMemoryTypeIndex()) & memoryTypeBits) != 0)
+            if(((1u << pool->m_BlockVector.GetMemoryTypeIndex()) & memoryTypeBits) != 0)
             {
-                VkResult localRes = m_Pools[poolIndex]->m_BlockVector.CheckCorruption();
+                VkResult localRes = pool->m_BlockVector.CheckCorruption();
                 switch(localRes)
                 {
                 case VK_ERROR_FEATURE_NOT_PRESENT:
@@ -17501,10 +17745,8 @@ void VmaAllocator_T::FreeDedicatedMemory(const VmaAllocation allocation)
     const uint32_t memTypeIndex = allocation->GetMemoryTypeIndex();
     {
         VmaMutexLockWrite lock(m_DedicatedAllocationsMutex[memTypeIndex], m_UseMutex);
-        AllocationVectorType* const pDedicatedAllocations = m_pDedicatedAllocations[memTypeIndex];
-        VMA_ASSERT(pDedicatedAllocations);
-        bool success = VmaVectorRemoveSorted<VmaPointerLess>(*pDedicatedAllocations, allocation);
-        VMA_ASSERT(success);
+        DedicatedAllocationLinkedList& dedicatedAllocations = m_DedicatedAllocations[memTypeIndex];
+        dedicatedAllocations.Remove(allocation);
     }
 
     VkDeviceMemory hMemory = allocation->GetMemory();
@@ -17716,9 +17958,8 @@ void VmaAllocator_T::PrintDetailedMap(VmaJsonWriter& json)
     for(uint32_t memTypeIndex = 0; memTypeIndex < GetMemoryTypeCount(); ++memTypeIndex)
     {
         VmaMutexLockRead dedicatedAllocationsLock(m_DedicatedAllocationsMutex[memTypeIndex], m_UseMutex);
-        AllocationVectorType* const pDedicatedAllocVector = m_pDedicatedAllocations[memTypeIndex];
-        VMA_ASSERT(pDedicatedAllocVector);
-        if(pDedicatedAllocVector->empty() == false)
+        DedicatedAllocationLinkedList& dedicatedAllocList = m_DedicatedAllocations[memTypeIndex];
+        if(!dedicatedAllocList.IsEmpty())
         {
             if(dedicatedAllocationsStarted == false)
             {
@@ -17733,11 +17974,11 @@ void VmaAllocator_T::PrintDetailedMap(VmaJsonWriter& json)
 
             json.BeginArray();
 
-            for(size_t i = 0; i < pDedicatedAllocVector->size(); ++i)
+            for(VmaAllocation alloc = dedicatedAllocList.Front();
+                alloc != VMA_NULL; alloc = dedicatedAllocList.GetNext(alloc))
             {
                 json.BeginObject(true);
-                const VmaAllocation hAlloc = (*pDedicatedAllocVector)[i];
-                hAlloc->PrintParameters(json);
+                alloc->PrintParameters(json);
                 json.EndObject();
             }
 
@@ -17778,18 +18019,17 @@ void VmaAllocator_T::PrintDetailedMap(VmaJsonWriter& json)
     // Custom pools
     {
         VmaMutexLockRead lock(m_PoolsMutex, m_UseMutex);
-        const size_t poolCount = m_Pools.size();
-        if(poolCount > 0)
+        if(!m_Pools.IsEmpty())
         {
             json.WriteString("Pools");
             json.BeginObject();
-            for(size_t poolIndex = 0; poolIndex < poolCount; ++poolIndex)
+            for(VmaPool pool = m_Pools.Front(); pool != VMA_NULL; pool = m_Pools.GetNext(pool))
             {
                 json.BeginString();
-                json.ContinueString(m_Pools[poolIndex]->GetId());
+                json.ContinueString(pool->GetId());
                 json.EndString();
 
-                m_Pools[poolIndex]->m_BlockVector.PrintDetailedMap(json);
+                pool->m_BlockVector.PrintDetailedMap(json);
             }
             json.EndObject();
         }
